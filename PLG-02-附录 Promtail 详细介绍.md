@@ -1,181 +1,3 @@
-由上篇对 PLG 的介绍，我们大致了解它的工作流程如下图所示：
-
-![plg_work_flow](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/plg_work_flow.png)
-
-![image-20220308163114588](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220308163114588.png)
-
-那么，我们先从 Promtail 入手，这是它的默认配置
-
-```yaml
-server: # 配置 promtail 服务端
-  http_listen_port: 9080
-  grpc_listen_port: 0
-
-positions: # 读取日志文件的偏移量
-  filename: /tmp/positions.yaml
-
-clients: # 连接到 Loki 的相关配置
-  - url: http://loki:3100/loki/api/v1/push
-
-scrape_configs: # 抓取日志配置
-- job_name: app1_job # 用于在 promtail 中识别该抓取配置的名称
-  static_configs: # 抓取日志静态目标配置
-  - targets: # targets 默认查看本地机器的文件。注意该属性配置不用管，去掉该配置也可。
-      - localhost
-    labels: # 标签配置
-      job: varlogs # job 标签在 Prometheus 很有用
-      __path__: /var/log/*log # 要加载日志的路径
-```
-
-下面我们启动两个 promtail 服务，分别监控不同的日志目录，并添加 host 和 app 两个标签。
-
-新建一个工作目录如 plg，在该目录中按照下图创建对应的文件
-
-```bash
-plg
-├── app1
-│   ├── conf
-│   │   └── config.yml # promtail—1 配置文件
-│   └── log # promtail-1 挂载的本地日志目录
-├── app2
-│   ├── conf
-│   │   └── config.yml # promtail—2 配置文件
-│   └── log # promtail-2 挂载的本地日志目录
-└── docker-compose.yaml
-
-6 directories, 3 files
-```
-
-docker-compose.yaml 文件内容为
-
-```yaml
-version: "3"
-
-networks:
-  loki:
-
-services:
-  loki:
-    image: grafana/loki:2.4.2
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-    networks:
-      - loki
-
-  promtail-1:
-    image: grafana/promtail:2.4.2
-    volumes: # 挂载app1的日志和配置目录
-      - ./app1/log:/var/log
-      - ./app1/conf:/etc/promtail/
-    command: -config.file=/etc/promtail/config.yml
-    networks:
-      - loki
-
-  promtail-2:
-    image: grafana/promtail:2.4.2
-    volumes: # 挂载app2的日志和配置目录
-      - ./app2/log:/var/log
-      - ./app2/conf:/etc/promtail/
-    command: -config.file=/etc/promtail/config.yml
-    networks:
-      - loki
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    networks:
-      - loki
-```
-
-app1/conf/config.yml (promtail-1 的配置文件) 内容为：
-
-```yaml
-server: # 配置 promtail 服务端
-  http_listen_port: 9080
-  grpc_listen_port: 0
-
-positions: # 读取日志文件的偏移量
-  filename: /tmp/positions.yaml
-
-clients: # 连接到 Loki 的相关配置
-  - url: http://loki:3100/loki/api/v1/push
-
-scrape_configs: # 抓取日志配置
-- job_name: app1_job # 用于在 promtail 中识别该抓取配置的名称
-  static_configs: # 抓取日志静态目标配置
-  - targets: # targets 默认查看本地机器的文件。注意该属性配置不用管，去掉该配置也可。
-      - localhost
-    labels: # 标签配置
-      job: varlogs # job 标签在 Prometheus 很有用
-      __path__: /var/log/*log # 要加载日志的路径
-      host: 111.111.111.111 # 自定义标签
-      app: app1 # 自定义标签
-```
-
-app2/conf/config.yml (promtail-2 的配置文件) 内容为：
-
-```yaml
-server: # 配置 promtail 服务端
-  http_listen_port: 9080
-  grpc_listen_port: 0
-
-positions: # 读取日志文件的偏移量
-  filename: /tmp/positions.yaml
-
-clients: # 连接到 Loki 的相关配置
-  - url: http://loki:3100/loki/api/v1/push
-
-scrape_configs: # 抓取日志配置
-- job_name: app2_job # 用于在 promtail 中识别该抓取配置的名称
-  static_configs: # 抓取日志静态目标配置
-  - targets: # targets 默认查看本地机器的文件。注意该属性配置不用管，去掉该配置也可。
-      - localhost
-    labels: # 标签配置
-      job: varlogs # job 标签在 Prometheus 很有用
-      __path__: /var/log/*log # 要加载日志的路径
-      host: 222.222.222.222 # 自定义标签
-      app: app2 # 自定义标签
-```
-
-然后执行以下命令
-
-```bash
-# 进入 plg 目录
-cd plg
-# 启动服务
-docker-compose up -d
-# 查看运行的容器
-docker-compose ps
-
-      Name                    Command               State                    Ports
-----------------------------------------------------------------------------------------------------
-plg_grafana_1      /run.sh                          Up      0.0.0.0:3000->3000/tcp,:::3000->3000/tcp
-plg_loki_1         /usr/bin/loki -config.file ...   Up      0.0.0.0:3100->3100/tcp,:::3100->3100/tcp
-plg_promtail-1_1   /usr/bin/promtail -config. ...   Up
-plg_promtail-2_1   /usr/bin/promtail -config. ...   Up
-```
-
-服务启动完毕浏览器打开 http://localhost:3000 网址，配置数据源，参考 `PLG 日志处理框架介绍` 篇。
-
-此时并没有日志数据，需要将日志文件放入 app1/log/  app2/log 中，来模拟应用产生日志的行为。
-
-```bash
-mv /var/log/{任选一个log文件} app1/log/
-mv /var/log/{任选一个log文件} app2/log/
-```
-
-点击左侧 指南针图标按钮，打开日志查询页面，数据源选择 Loki
-
-![image-20220309170923318](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220309170923318.png)
-
-可以看到我们新加的标签 host 和 app 了
-
-
-
-更多的配置说明请查看：
-
 - Promtail [配置官方文档说明](https://grafana.com/docs/loki/latest/clients/promtail/configuration/)
 - Promtail [配置说明-中文](https://www.qikqiak.com/k8strain2/logging/loki/promtail/)
 
@@ -183,7 +5,7 @@ mv /var/log/{任选一个log文件} app2/log/
 
 ----
 
-# Promtail[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#Promtail)
+# Promtail
 
 Promtail 是 Loki 官方支持的日志采集端，在需要采集日志的节点上运行采集代理，再统一发送到 Loki 进行处理。除了使用 Promtail，社区还有很多采集日志的组件，比如 fluentd、fluent bit 等，都是比较优秀的。
 
@@ -191,7 +13,7 @@ Promtail 是 Loki 官方支持的日志采集端，在需要采集日志的节�
 
 此外如果你想从日志中提取指标，比如计算某个特定信息的出现次数，Promtail 效果也是非常友好的。本文将介绍 Promtail 中的核心概念以及了解下如何设置 Promtail 来处理你的日志行数据，包括提取指标与标签等。
 
-## 配置[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#配置)
+## 配置
 
 Promtail 是负责收集日志发送给 loki 的代理程序。Promtail 默认通过一个 `config.yaml` 文件进行配置，其中包含 Promtail 服务端信息、存储位置以及如何从文件中抓取日志等配置。
 
@@ -230,7 +52,7 @@ scrape_configs:
 [target_config: <target_config>]
 ```
 
-### server[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#server)
+### server
 
 `server` 属性配置了 Promtail 作为 HTTP 服务器的行为。
 
@@ -284,7 +106,7 @@ scrape_configs:
 [health_check_target: <bool> | default = true]
 ```
 
-### client[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#client)
+### client
 
 `client` 属性配置了 Promtail 如何连接到 Loki 的实例。
 
@@ -359,7 +181,7 @@ external_labels:
 [timeout: <duration> | default = 10s]
 ```
 
-### positions[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#positions)
+### positions
 
 `positions` 属性配置了 Promtail 保存文件的位置，表示它已经读到了文件什么程度。当 Promtail 重新启动时需要它，以允许它从中断的地方继续读取日志。
 
@@ -374,7 +196,7 @@ external_labels:
 [ignore_invalid_yaml: <boolean> | default = false]
 ```
 
-### scrape_configs[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#scrape_configs)
+### scrape_configs
 
 `scrape_configs` 属性配置了 Promtail 如何使用指定的发现方法从一系列目标中抓取日志。
 
@@ -411,7 +233,7 @@ kubernetes_sd_configs:
   - [<kubernetes_sd_config>]
 ```
 
-### pipeline_stages[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#pipeline_stages)
+### pipeline_stages
 
 `pipeline_stages` 用于转换日志条目和它们的标签，该管道在发现操作结束后执行，`pipeline_stages` 对象由一个阶段列表组成。
 
@@ -433,7 +255,7 @@ kubernetes_sd_configs:
 
 在大多数情况下，你用 `regex` 或 `json` 阶段从日志中提取数据，提取的数据被转化为一个临时的字典 Map 对象，然后这些数据是可以被 promtail 使用的，比如可以作为标签的值或作为输出。此外，除了 docker 和 cri 之外，任何其他阶段都可以访问提取的数据。在后面 `pipeline` 部分会详细介绍如何配置。
 
-### loki_push_api[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#loki_push_api)
+### loki_push_api
 
 `loki_push_api` 属性配置 Promtail 来暴露一个 [Loki push API 服务](https://grafana.com/docs/loki/latest/api#post-lokiapiv1push)。每个配置了 `loki_push_api` 的任务都会暴露这个 API，并且需要一个单独的端口。
 
@@ -477,7 +299,7 @@ scrape_configs:
 
 由于一个新的服务器实例被创建，所以 `http_listen_port` 和 `grpc_listen_port` 必须与 promtail 服务器配置部分不同（除非它被禁用）。
 
-### relabel_configs[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#relabel_configs)
+### relabel_configs
 
 `Relabeling` 是一个强大的工具，可以在目标日志被抓取之前动态地重写其标签集。每个抓取配置可以配置多个 relabeling 步骤，按照它们在配置文件中出现的顺序应用于每个目标的标签集。
 
@@ -527,7 +349,7 @@ Replacement 值：如果正则表达式匹配，则对其进行 regex 替换
 
 使用 `labeldrop` 和 `labelkeep` 时必须注意，一旦标签被移除，logs 仍然是唯一的标签。
 
-### static_configs[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#static_configs)
+### static_configs
 
 `static_configs` 静态配置允许指定一个目标列表和标签集：
 
@@ -570,7 +392,7 @@ scrape_configs:
           __path__: /var/log/*.log # 路径匹配使用了一个第三方库: https://github.com/bmatcuk/doublestar
 ```
 
-### file_sd_config[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#file_sd_config)
+### file_sd_config
 
 基于文件的服务发现提供了一种更通用的方式来配置静态目标。它读取一组包含零个或多个 `<static_config>` 列表的文件。对所有定义文件的改变通过监视磁盘变化来应用。文件可以以 YAML 或 JSON 格式提供。JSON 文件必须包含一个静态配置的列表，使用这种格式。
 
@@ -600,7 +422,7 @@ files:
 
 其中 `<filename_pattern>` 可以是一个以 `.json`、`.yml` 或 `.yaml` 结尾的路径，最后一个路径段可以包含一个匹配任何字符序列的 `*`，例如 `my/path/tg_*.json`。
 
-### kubernetes_sd_config[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#kubernetes_sd_config)
+### kubernetes_sd_config
 
 Kubernetes SD 配置允许从 Kubernetes 的 REST API 中检索抓取的目标，并始终与集群状态保持同步。关于 Kubernetes 发现的配置选项，如下所示：
 
@@ -634,7 +456,7 @@ namespaces:
 
 其中 `<role>` 必须是 `endpoints`、`service`、`pod`、`node` 或 `ingress`。具体的配置使用可以完全参考 Prometheus 中的基于 Kubernetes 的发现机制，可以查看 Promtheus 自动发现配置文件：https://github.com/prometheus/prometheus/blob/main/documentation/examples/prometheus-kubernetes.yml 了解更多配置。
 
-## pipeline[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#pipeline)
+## pipeline
 
 在 Promtail 中一个 pipeline 管道被用来转换一个单一的日志行、标签和它的时间戳。一个 pipeline 管道是由一组 stages 阶段组成的，在 Promtail 配置红一共有 4 种类型的 stages。
 
@@ -747,15 +569,15 @@ scrape_configs:
 - `日志时间戳`：日志行的当前时间戳，处理阶段可以修改这个值。如果不设置，则默认为日志被抓取的时间。时间戳的最终值会发送给 Loki。
 - `日志行`：当前的日志行，以文本形式表示，初始化为 Promtail 抓取的文本。处理阶段可以修改这个值。日志行的最终值将作为日志的文本内容发送给 Loki。
 
-## 阶段[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#阶段)
+## 阶段
 
 上面我们结束了 Promtail 的一个 pipeline 中有 4 中类型的阶段，下面我们再分别对这 4 中类型阶段进行简单说明。
 
-### 解析阶段[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#解析阶段)
+### 解析阶段
 
 解析阶段包括：docker、cri、regex、json 这几个 stage。
 
-#### docker[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#docker)
+#### docker
 
 `docker` 阶段通过使用标签的 Docker 日志格式来解析日志数据进行数据提取。直接使用 `docker: {}` 即表示是一个 docker 阶段。
 
@@ -787,7 +609,7 @@ scrape_configs:
 - `stream`： `stderr`
 - `timestamp`：`2019-04-30T02:12:41.8443515`
 
-#### cri[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#cri)
+#### cri
 
 通过使用标准 CRI 格式解析日志行来提取数据。使用语法一样是直接使用 `cri: {}` 即可，与大多数阶段不同，cri 阶段不提供配置选项，只支持特定的 CRI 日志格式。CRI 指定的日志行是以空格分隔的值，有以下组成部分：
 
@@ -821,7 +643,7 @@ scrape_configs:
 - `stream`: `stdout`
 - `timestamp`: `2019-04-30T02:12:41.8443515`
 
-#### regex[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#regex)
+#### regex
 
 使用正则表达式提取数据，在 regex 中命名的捕获组支持将数据添加到提取的 Map 映射中。配置格式如下所示：
 
@@ -893,7 +715,7 @@ regex:
 
 - `year`: `2019`
 
-#### json[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#json)
+#### json
 
 通过将日志行解析为 JSON 来提取数据，也可以接受 `JMESPath` 表达式来提取数据，配置格式如下所示：
 
@@ -1003,11 +825,11 @@ json:
 
 需要注意的是在引用 `grpc.stream` 时，如果没有用单引号包裹的双引号，将无法正常工作。
 
-### 转换阶段[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#转换阶段)
+### 转换阶段
 
 转换阶段用于对之前阶段提取的数据进行转换。
 
-#### multiline[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#multiline)
+#### multiline
 
 多行阶段将多行日志进行合并，然后再将其传递到 pipeline 的下一个阶段。
 
@@ -1119,7 +941,7 @@ multiline:
   max_wait_time: 3s
 ```
 
-#### template[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#template)
+#### template
 
 `template` 阶段可以使用 [Go 模板语法](https://golang.org/pkg/text/template/)来操作提取的数据。模板阶段主要用于在将数据设置为标签之前对其他阶段的数据进行操作，例如用下划线替换空格，或者将大写的字符串转换为小写的字符串。模板也可以用来构建具有多个键的信息。模板阶段也可以在提取的数据中创建新的键。
 
@@ -1208,11 +1030,11 @@ template:
 
 > 在 Loki2.3 中，所有的 [sprig 函数](http://masterminds.github.io/sprig/)都被添加到了当前的模板阶段，包括 ToLower & ToUpper、Replace、Trim、Regex、Hash 和 Sha2Hash 函数。
 
-### 处理阶段[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#处理阶段)
+### 处理阶段
 
 用于从以前阶段中提取数据并对其进行处理。
 
-#### timestamp[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#timestamp)
+#### timestamp
 
 设置日志条目的时间戳值，当时间戳阶段不存在时，日志行的时间戳默认为日志条目被抓取的时间。
 
@@ -1278,7 +1100,7 @@ timestamp:
 
 经过上面的 timestamp 阶段在提取的数据中查找一个 time 字段，并以 `RFC3339Nano` 格式化其值（例如，2006-01-02T15:04:05.9999999-07:00），所得的时间值将作为时间戳与日志行一起发送给 Loki。
 
-#### output[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#output)
+#### output
 
 设置日志行文本，配置格式如下所示：
 
@@ -1313,7 +1135,7 @@ output:
 
 然后第二个 label 阶段将把 `user=alexis` 添加到输出的日志标签集中，最后的 output 阶段将把日志数据从原来的 JSON 更改为 message 的值 `hello, world!` 输出。
 
-#### labels[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#labels)
+#### labels
 
 更新日志的标签集，并一起发送给 Loki。配置格式如下所示：
 
@@ -1347,7 +1169,7 @@ labels:
 
 第一个 json 阶段将提取 `stream` 到 Map 数据中，其值为 `stderr`。然后在第二个 labels 阶段将把这个键值对变成一个标签，在发送到 Loki 的日志行中将包括标签 `stream`，值为 `stderr`。
 
-#### metrics[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#metrics)
+#### metrics
 
 根据提取的数据计算指标。需要注意的是，创建的 metrics 指标不会被推送到 Loki，而是通过 Promtail 的 `/metrics` 端点暴露出去，Prometheus 应该被配置为可以抓取 Promtail 的指标，以便能够检索这个阶段所配置的指标数据。
 
@@ -1428,7 +1250,7 @@ metrics:
 
 上面这个 pipeline 首先会尝试在日志中找到格式为 `order_status=<value>` 的文本，将 `<value>` 提取到 `order_status` 中。该指标阶段创建了 `successful_orders_total` 和 `failed_orders_total` 指标，只有当提取数据中的 `order_status` 的值分别为 `success` 或 `fail` 时才会增加。
 
-#### tenant[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#tenant)
+#### tenant
 
 设置日志要使用的租户 ID 值，从提取数据中的一个字段获取，如果该字段缺失，将使用默认的 Promtail 客户端租户 ID。配置格式如下所示：
 
@@ -1504,11 +1326,11 @@ pipeline_stages:
 
 此外在处理阶段还有 `labeldrop` 阶段，它从标签集中删除标签，这些标签与日志条目一起被发送到 Loki。还有一个 `labelallow` 阶段，它只允许将所提供的标签包含在与日志条目一起发送给 Loki 的标签集中。
 
-### 过滤阶段[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#过滤阶段)
+### 过滤阶段
 
 可选择应用一个阶段的子集，或根据一些条件删除日志数据。
 
-#### match[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#match)
+#### match
 
 当一个日志条目与可配置的 LogQL 流选择器和过滤表达式相匹配时，有条件地应用一组阶段或删除日志数据。配置语法格式如下所示：
 
@@ -1592,7 +1414,7 @@ pipeline_stages:
 
 最后的 output 输出阶段将日志行的内容改为提取数据中的 msg 的值。我们这里的示例最后输出为 `app1 log line`。
 
-#### drop[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#drop)
+#### drop
 
 drop 阶段可以让我们根据配置来删除日志。需要注意的是，如果你提供多个选项配置，它们将被视为 `AND` 子句，其中每个选项必须为真才能删除日志。如果你想用一个 `OR`子句来删除，那么就指定多个删除阶段。配置语法格式如下所示：
 
@@ -1705,7 +1527,7 @@ drop:
 
 上面的 pipeline 执行后将删除掉所有超过 24 小时**或者**超过 8kb 的日志**或者** json 的 msg 值中包含 `trace` 字样的日志。
 
-## Scraping[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#Scraping)
+## Scraping
 
 Promtail 可以通过 YAML 文件中的 `scrape_configs` 配置来自动发现日志文件并从中提取标签，该语法与 Promtheus 中的配置比较类似。
 
@@ -1742,7 +1564,7 @@ relabel_configs:
     target_label: "__host__"
 ```
 
-### Relabeling[¶](https://www.qikqiak.com/k8strain2/logging/loki/promtail/#Relabeling)
+### Relabeling
 
 `Relabeling` 表示修改 labels 标签：添加、修改或删除。我们可以通过 `scrape_configs` 中的 `relabel_configs` 来进行 Relabel 操作。由于采用的与 Prometheus 一样的 Relabel 机制，所以操作方式与 Prometheus 是一致的。
 
@@ -1767,7 +1589,7 @@ relabel_configs:
 
 如果一个标签（例子中的 `__service__`）为空，则放弃抓取目标：
 
-```
+```yaml
 - action: drop
     regex: ''
     source_labels:
@@ -1776,7 +1598,7 @@ relabel_configs:
 
 如果任何一个 `source_labels` 标签包含一个值，则删除抓取目标：
 
-```
+```yaml
 - action: drop
     regex: .+
     separator: ''
@@ -1787,7 +1609,7 @@ relabel_configs:
 
 通过重命名一个内部标签来持久化，这样它就会被发送到 Loki：
 
-```
+```yaml
 - action: replace
     source_labels:
     - __meta_kubernetes_namespace
@@ -1796,7 +1618,7 @@ relabel_configs:
 
 通过映射保留所有的 Kubernetes Pod 标签，比如将 `__meta_kube__meta_kubernetes_pod_label_foo` 映射为 `foo`：
 
-```
+```yaml
 - action: labelmap
     regex: __meta_kubernetes_pod_label_(.+)
 ```

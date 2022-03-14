@@ -137,9 +137,176 @@ http://localhost:3000
 
 ![image-20220308115557241](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220308115557241.png)
 
-ok 安装使用就介绍到这一步，你可以随便点点看看。随后将介绍 loki 的架构设计、 查询语法、标签规则等。
+ok 安装使用就介绍到这一步，你可以随便点点看看。
+
+---
+
+### 少量数据生产环境的部署
+
+上面的方法只适合本地开发测试用，重启服务后数据就清空了，我们需要将其数据持久化。由上篇对 PLG 的介绍，我们大致了解它的工作流程如下图所示：
+
+![plg_work_flow](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/plg_work_flow.png)
+
+![image-20220308163114588](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220308163114588.png)
+
+看得出来 Promtail 服务是需要多服务部署的，一个 Promtail 服务监控一个应用产生的日志。而 Loki 和 Grafana 部署一个服务即可（数据量起来后可将 Loki 改成微服务部署）
+
+#### 先置条件
+
+创建网络
+
+```bash
+docker network create halo-net # 创建网络，使各容器可相互通信
+```
+
+#### 部署 Grafana
+
+```bash
+docker volume create grafana-storage # 创建 grafana 存储卷
+docker run -d -p 3000:3000 --name=grafana -v grafana-storage:/var/lib/grafana --net plg-net grafana/grafana:latest # 运行
+```
+
+#### 部署 Loki
+
+```bash
+mkdir loki # 创建 loki 
+cd loki # 进入目录
+docker volume create loki-storage # 创建 loki 存储卷
+# 下载 官方配置文件
+wget https://raw.githubusercontent.com/grafana/loki/v2.4.2/cmd/loki/loki-local-config.yaml -O loki-config.yaml
+```
+
+编辑配置文件
+
+```yaml
+auth_enabled: false # 开启认证配置
+
+server: # 服务端口配置
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+# 这里需要修改 凡是带 /tmp 路径的需要将 /tmp 去掉，不然会报错
+common:
+  path_prefix: /loki
+  storage: # 存储配置，出了本地文件系统 也可以配置 minio
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring: # 哈希环配置
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem # 其他存储相关配置
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+ruler: # loki 监控规则配置，这里应该是配合 promethus 的，暂时不用管
+  alertmanager_url: http://localhost:9093
+```
+
+```bash
+# 运行
+docker run -d --name loki -v $(pwd):/mnt/config -v loki-storage:/loki/chunks -p 3100:3100 --net plg-net grafana/loki:2.4.2 -config.file=/mnt/config/loki-config.yaml
+```
+
+#### Promtail 部署
+
+```bash
+mkdir promtail-1
+cd promtail-1
+mkdir log conf
+wget https://raw.githubusercontent.com/grafana/loki/v2.4.2/clients/cmd/promtail/promtail-docker-config.yaml -O promtail-config.yaml
+mv promtail-config.yaml ./conf
+```
+
+编辑配置文件，属性值可使用变量 `${VAR:default_value}` 如 `${app_name:demo}`，但启动命令需要添加 config.expand-env 参数
+
+```yaml
+server: # 服务配置
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions: # 日志文件读取的偏移量配置
+  filename: /var/log/positions.yaml
+
+clients: # 将日志推送至 loki
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs: # 日志抓取配置
+- job_name: system # 命名该抓取的配置名称
+  pipeline_stages: # 处理日志阶段
+    - multiline: # 将错误日志当成一个块来处理
+        firstline: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}' # 匹配每个日志的第一行，没有匹配上便认为和上次的匹配到的是一行日志
+        max_wait_time: 3s
+    - match: # 匹配到的日志才做处理
+        selector: '{app="plg_demo_1"}' # 匹配到标签 app = plg_demo_1的日志才做处理
+        stages:
+          - regex: # 正则匹配
+              expression: '.*(?P<level>(INFO|ERROR)).*'
+          - labels: # 将上一步正则匹配到的 level 值添加到标签中，ps：这是生成动态标签的方法。这里要严格把控，不能动态生成过多，会有性能问题
+              level:
+  static_configs: # 静态标签配置
+  - targets:
+      - localhost # 默认值，不用改
+    labels: # 以下可任意添加标签 __开头的是自带的特殊标签
+      job: plg_demo_1
+      __path__: /var/log/*log # 特殊标签，抓取日志文件的目录
+      host: plg_demo_1_host
+      app: plg_demo_1
+```
+
+```bash
+# 运行
+docker run -d --name promtail-1 -v $(pwd)/conf:/mnt/config -v $(pwd)/log:/var/log --net plg-net grafana/promtail:2.4.2 -config.file=/mnt/config/promtail-config.yaml
+```
+
+ps：Promtail 可部署多个，注意相关配置冲突问题即可
+
+随后部署应用，并将应用的日志输出到对应的 promtail-1/log 文件夹下。
+
+### Grafana 相关使用
+
+##### log 数据可视化
+
+可视化配置，官网有很多模版可以直接使用 [官网模版](https://grafana.com/grafana/dashboards/)
+
+找好需要的模版，可以复制模版id，然后按下图顺序打开导入页面，粘贴 模版id，最后确定导入即可。导入后需要自己配置下面板，将一些变量改成自己的。
+
+![image-20220314155832444](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220314155832444.png)
 
 
+
+##### 报警配置
+
+![image-20220314163440009](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220314163440009.png)
+
+![image-20220314163714983](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220314163714983.png)
+
+最主要的是配置第二步，注意 A 查询需要的是指标数据的查询，而不是日志数据，如 带有 error 标签或 "exception" 单词出现的次数
+
+B 为表达式，触发警告的临界值配置。
+
+如果触发了警告，怎么通知我们呢？
+
+![image-20220314164335310](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220314164335310.png)
+
+编辑第四步，如下图所示，我们有多种方式可以选择，默认为邮箱（需要在 grafana 配置文件里配置 smtp 信息），还有钉钉、企业微信机器人通知。
+
+![image-20220314164358994](https://cdn.jsdelivr.net/gh/joleensteve/images/blog/image-20220314164358994.png)
+
+
+
+##### Promtail 配置详细介绍见附录 02
+
+##### LogQL 详见附录 03
 
 文档参考：
 
