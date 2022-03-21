@@ -156,7 +156,7 @@ ok 安装使用就介绍到这一步，你可以随便点点看看。
 创建网络
 
 ```bash
-docker network create halo-net # 创建网络，使各容器可相互通信
+docker network create plg-net # 创建网络，使各容器可相互通信
 ```
 
 #### 部署 Grafana
@@ -165,6 +165,8 @@ docker network create halo-net # 创建网络，使各容器可相互通信
 docker volume create grafana-storage # 创建 grafana 存储卷
 docker run -d -p 3000:3000 --name=grafana -v grafana-storage:/var/lib/grafana --net plg-net grafana/grafana:latest # 运行
 ```
+
+如果需要改变 Grafana 配置需要将配置目录也映射出来（/etc/grafana）并修改 **grafana.ini** 配置文件，邮件服务也在此配置
 
 #### 部署 Loki
 
@@ -314,4 +316,3 @@ loki，promtail详细介绍：https://www.qikqiak.com/k8strain2/logging/loki/ove
 Spring Boot 2 实战：轻量级日志loki集成1：https://felord.cn/loki.html
 Spring Boot 2 实战：轻量级日志loki集成2：https://felord.cn/promtail-custom.html
 简明教程：https://www.qikqiak.com/tags/loki/
-
