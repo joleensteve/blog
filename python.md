@@ -51,47 +51,48 @@
 2. `for` 循环语句
 
    ```python
+   # 经典 for 循环
    for n in list:
    	print(n)
-   ```
-
-   循环方式
-
-   ```python
-   # 常规
+     
+   # 循环对象
    knights = {'gallahad': 'the pure', 'robin': 'the brave'}
    for k, v in knights.items():
    	print(k, v)
-   # enumerate 函数
+     
+   # 使用 enumerate 函数
    for i, v in enumerate(['tic', 'tac', 'toe']):
      print(i, v)
+     
    # 同时循环多列表
    questions = ['name', 'quest', 'favorite color']
    answers = ['lancelot', 'the holy grail', 'blue']
    for q, a in zip(questions, answers):
    	print('What is your {0}?  It is {1}.'.format(q, a))
+     
    # range len 函数组合循环
    a = ['Mary', 'had', 'a', 'little', 'lamb']
    for i in range(len(a)):
    	print(i, a[i])
+     
    # 逆序循环
    a = ['Mary', 'had', 'a', 'little', 'lamb']
    for i in reversed(range(len(a))):
    	print(i, a[i])
+     
    # 按指定顺序循环序列，可以用 sorted() 函数，在不改动原序列的基础上，返回一个重新的序列
    basket = ['apple', 'orange', 'apple', 'pear', 'orange', 'banana']
    for i in sorted(basket):
    	print(i)
+     
    # 使用 set() 去除序列中的重复元素。使用 sorted() 加 set() 则按排序后的顺序，循环遍历序列中的唯一元素
    basket = ['apple', 'orange', 'apple', 'pear', 'orange', 'banana']
    for f in sorted(set(basket)):
    	print(f)
    ```
-
    
-
-   遍历集合时修改集合的内容，会很容易生成错误的结果。因此不能直接进行循环，而是应遍历该集合的副本或创建新的集合：
-
+   遍历集合时修改集合内容，会很容易生成错误的结果。因此不能直接进行循环，而是应遍历该集合的副本或创建新的集合：
+   
    ```python
    # Create a sample collection
    users = {'Hans': 'active', 'Éléonore': 'inactive', '景太郎': 'active'}
@@ -107,5 +108,27 @@
        if status == 'active':
            active_users[user] = status
    ```
-
+   
+   `break` `continue` 与其他语言类似，中断最近的循环体/继续下一次循环
+   
+   **最后注意： python 中 循环后可以接 else 语句**
+   
+   ```python
+   # for 循环中，可迭代对象中的元素全部循环完毕, 会执行 else 语句。但是走 break 语句，就不会再执行 else 语句了
+   for x in range(10):
+     if x == 0:
+       print("xxx")
+       break
+   else:
+     print('yyy')
+   
+   # while	条件为假时 会执行 else 语句，同 for 如果走 break 语句，就不会再执行 else 语句了
+   a = 1
+   while (a < 10):
+     print(a)
+     a++
+   else:
+     print("a>=10")
+   ```
+   
    
